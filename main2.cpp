@@ -278,7 +278,7 @@ int main()
 					t7 = clock();
 					perform_projection(cur_ppc_size, projection_imgs, is_hole_proj_imgs, depth_value_imgs);
 					t8 = clock();
-					cout << "projection and hole filling whole views time : " << (double)(t8 - t7) / CLOCKS_PER_SEC << endl;
+					cout << "projection whole views time : " << (double)(t8 - t7) / CLOCKS_PER_SEC << endl;
 					cout << "---------------------------------" << endl;
 #else
 					for (int cam = 0; cam < total_num_cameras; cam++) {

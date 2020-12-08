@@ -113,11 +113,9 @@ __global__ void perform_projection_GPU(
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	int _width = depth_value_img.cols, _height = depth_value_img.rows;
 	int offset = ppc_size * cam_num;
-	
 	int proj_offset = 16 * cam_num;
 	if (0 <= i && i < ppc_size) {
-		i += offset;
-		if (!dev_occlusion[i]) {
+		if (!dev_occlusion[offset + i]) {
 			// projetion_XYZ_2_UV
 			double _u, _v, w;
 			_u = dev_ProjMatrix[proj_offset + 0] * dev_x[i] + dev_ProjMatrix[proj_offset + 4] * dev_geo_y[i] + dev_ProjMatrix[proj_offset + 8] * dev_z[i] + dev_ProjMatrix[proj_offset + 12];
@@ -150,9 +148,9 @@ __global__ void perform_projection_GPU(
 			}
 
 			if (possible) {
-				proj_img.ptr(v)[u].x = dev_color_y[i];
-				proj_img.ptr(v)[u].y = dev_u[i];
-				proj_img.ptr(v)[u].z = dev_v[i];
+				proj_img.ptr(v)[u].x = dev_color_y[offset + i];
+				proj_img.ptr(v)[u].y = dev_u[offset + i];
+				proj_img.ptr(v)[u].z = dev_v[offset + i];
 			}
 		}
 	}
@@ -270,7 +268,6 @@ void CUDA::make_PC(
 	uchar* dev_b, * dev_g, * dev_r;
 	double* dev_K, * dev_R_wc_inv, * dev_t_wc;
 
-	memoryPrint(__LINE__);
 	GpuErrorCheck(cudaMalloc(&dev_x, sizeof(double) * numpix));
 	GpuErrorCheck(cudaMalloc(&dev_y, sizeof(double) * numpix));
 	GpuErrorCheck(cudaMalloc(&dev_z, sizeof(double) * numpix));
@@ -302,7 +299,6 @@ void CUDA::make_PC(
 	GpuErrorCheck(cudaFree(dev_K));
 	GpuErrorCheck(cudaFree(dev_R_wc_inv));
 	GpuErrorCheck(cudaFree(dev_t_wc));
-	memoryPrint(__LINE__);
 }
 
 void CUDA::perform_projection(
@@ -332,19 +328,20 @@ void CUDA::perform_projection(
 	double* dev_ProjMatrix;
 	size_t total_size = ppc_size * total_num_cameras;
 	
+	printf("total size: %u\n", total_size);
 	clock_t start = clock();
-	GpuErrorCheck(cudaMalloc(&dev_x, sizeof(float) * total_size));
-	GpuErrorCheck(cudaMalloc(&dev_geo_y, sizeof(float) * total_size));
-	GpuErrorCheck(cudaMalloc(&dev_z, sizeof(float) * total_size));
+	GpuErrorCheck(cudaMalloc(&dev_x, sizeof(float) * ppc_size));
+	GpuErrorCheck(cudaMalloc(&dev_geo_y, sizeof(float) * ppc_size));
+	GpuErrorCheck(cudaMalloc(&dev_z, sizeof(float) * ppc_size));
 	GpuErrorCheck(cudaMalloc(&dev_color_y, sizeof(uchar) * total_size));
 	GpuErrorCheck(cudaMalloc(&dev_u, sizeof(uchar) * total_size));
 	GpuErrorCheck(cudaMalloc(&dev_v, sizeof(uchar) * total_size));
 	GpuErrorCheck(cudaMalloc(&dev_occlusion, sizeof(bool) * total_size));
 	GpuErrorCheck(cudaMalloc(&dev_ProjMatrix, sizeof(double) * 16 * total_num_cameras));
 
-	GpuErrorCheck(cudaMemcpy(dev_x, hst_x, sizeof(float) * total_size, cudaMemcpyHostToDevice));
-	GpuErrorCheck(cudaMemcpy(dev_geo_y, hst_geo_y, sizeof(float) * total_size, cudaMemcpyHostToDevice));
-	GpuErrorCheck(cudaMemcpy(dev_z, hst_z, sizeof(float) * total_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_x, hst_x, sizeof(float) * ppc_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_geo_y, hst_geo_y, sizeof(float) * ppc_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_z, hst_z, sizeof(float) * ppc_size, cudaMemcpyHostToDevice));
 	GpuErrorCheck(cudaMemcpy(dev_color_y, hst_color_y, sizeof(uchar) * total_size, cudaMemcpyHostToDevice));
 	GpuErrorCheck(cudaMemcpy(dev_u, hst_u, sizeof(uchar) * total_size, cudaMemcpyHostToDevice));
 	GpuErrorCheck(cudaMemcpy(dev_v, hst_v, sizeof(uchar) * total_size, cudaMemcpyHostToDevice));
