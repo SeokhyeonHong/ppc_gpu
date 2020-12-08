@@ -4,6 +4,7 @@
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 #include <opencv2/opencv.hpp>
+#include <vector>
 
 #define DEBUG_GPU
 
@@ -32,10 +33,11 @@ extern "C"
 		uchar* dev_r);
 
 	__global__ void perform_projection_GPU(
+		int ppc_size,
+		int cam_num,
 		cuda::PtrStepSz<uchar3> proj_img,
 		cuda::PtrStepSz<uchar> is_hole_proj_img,
 		cuda::PtrStepSz<double> depth_value_img,
-		int ppc_size,
 		double* dev_ProjMatrix,
 		float* dev_x,
 		float* dev_geo_y,
@@ -86,9 +88,11 @@ extern "C"
 			uchar* hst_r);
 
 		void perform_projection(
-			Mat& proj_img,
-			Mat& is_hole_proj_img,
-			Mat& depth_value_img,
+			Mat sample_mat,
+			uchar** proj_data,
+			uchar** is_hole_proj_data,
+			double** depth_value_data,
+			int total_num_cameras,
 			double* hst_ProjMatrix,
 			int valid_ppc_size,
 			float* hst_x,

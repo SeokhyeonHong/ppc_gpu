@@ -271,9 +271,16 @@ int main()
 
 					total_ppc_size += cur_ppc_size;
 					iteration++;
-					//perform_projection
 
+					//perform_projection
 					clock_t t7, t8;
+#ifdef CUDA_TEST
+					t7 = clock();
+					perform_projection(cur_ppc_size, projection_imgs, is_hole_proj_imgs, depth_value_imgs);
+					t8 = clock();
+					cout << "projection and hole filling whole views time : " << (double)(t8 - t7) / CLOCKS_PER_SEC << endl;
+					cout << "---------------------------------" << endl;
+#else
 					for (int cam = 0; cam < total_num_cameras; cam++) {
 						cout << cam << "th pointcloud is being projected ..." << endl;
 						int nNeighbor = 4;
@@ -289,6 +296,8 @@ int main()
 						cout << "projection and hole filling one view time : " << (double)(t8 - t7) / CLOCKS_PER_SEC << endl;
 						cout << "---------------------------------" << endl;
 					}
+
+#endif
 #ifdef TEST
 					making_ppc_all_time += (t14 - t13) / CLOCKS_PER_SEC;
 					projection_time_per_view += (t8 - t7) / CLOCKS_PER_SEC;

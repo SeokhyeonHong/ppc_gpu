@@ -1,22 +1,36 @@
-#include <vector>
 #include "CUDA.cuh"
 #include "cuda.h"
+#include "cuda_runtime_api.h"
+#include "cublas_v2.h"
+
 #include <iostream>
 #include <cufft.h>
-#include "cublas_v2.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctime>
+
 
 // for debugging in GPU
 #ifdef DEBUG_GPU
 #define GpuErrorCheck(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char* file, int line)
 {
+
 	if (code != cudaSuccess)
 	{
 		fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
 		exit(code);
 	}
+}
+inline void memoryPrint(int line)
+{
+	float free_m, total_m, used_m;
+	size_t free_t, total_t;
+	cudaMemGetInfo(&free_t, &total_t);
+	free_m = (uint)free_t / 1048576.0;
+	total_m = (uint)total_t / 1048576.0;
+	used_m = total_m - free_m;
+	printf("  line .... %d\tfree .... %f MB\ttotal ....%f MB\tused %f MB\n", line, free_m, total_m, used_m);
 }
 #else
 #define GpuErrorCheck(ans) { ans; }
@@ -40,8 +54,8 @@ CUDA::~CUDA(void)
 /////////////////////////////////////////////////////////
 
 __global__ void make_PC_GPU(
-	PtrStepSz<uchar3> color_src,
-	PtrStepSz<ushort> depth_src,
+	cuda::PtrStepSz<uchar3> color_src,
+	cuda::PtrStepSz<ushort> depth_src,
 	double scaleZ,
 	double* K,
 	double* R_wc_inv,
@@ -76,10 +90,11 @@ __global__ void make_PC_GPU(
 }
 
 __global__ void perform_projection_GPU(
+	int ppc_size,
+	int cam_num,
 	cuda::PtrStepSz<uchar3> proj_img,
 	cuda::PtrStepSz<uchar> is_hole_proj_img,
 	cuda::PtrStepSz<double> depth_value_img,
-	int ppc_size,
 	double* dev_ProjMatrix,
 	float* dev_x,
 	float* dev_geo_y,
@@ -97,13 +112,17 @@ __global__ void perform_projection_GPU(
 	//////////////////////////////////
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	int _width = depth_value_img.cols, _height = depth_value_img.rows;
+	int offset = ppc_size * cam_num;
+	
+	int proj_offset = 16 * cam_num;
 	if (0 <= i && i < ppc_size) {
+		i += offset;
 		if (!dev_occlusion[i]) {
 			// projetion_XYZ_2_UV
 			double _u, _v, w;
-			_u = dev_ProjMatrix[0] * dev_x[i] + dev_ProjMatrix[4] * dev_geo_y[i] + dev_ProjMatrix[8] * dev_z[i] + dev_ProjMatrix[12];
-			_v = dev_ProjMatrix[1] * dev_x[i] + dev_ProjMatrix[5] * dev_geo_y[i] + dev_ProjMatrix[9] * dev_z[i] + dev_ProjMatrix[13];
-			w = dev_ProjMatrix[2] * dev_x[i] + dev_ProjMatrix[6] * dev_geo_y[i] + dev_ProjMatrix[10] * dev_z[i] + dev_ProjMatrix[14];
+			_u = dev_ProjMatrix[proj_offset + 0] * dev_x[i] + dev_ProjMatrix[proj_offset + 4] * dev_geo_y[i] + dev_ProjMatrix[proj_offset + 8] * dev_z[i] + dev_ProjMatrix[proj_offset + 12];
+			_v = dev_ProjMatrix[proj_offset + 1] * dev_x[i] + dev_ProjMatrix[proj_offset + 5] * dev_geo_y[i] + dev_ProjMatrix[proj_offset + 9] * dev_z[i] + dev_ProjMatrix[proj_offset + 13];
+			w = dev_ProjMatrix[proj_offset + 2] * dev_x[i] + dev_ProjMatrix[proj_offset + 6] * dev_geo_y[i] + dev_ProjMatrix[proj_offset + 10] * dev_z[i] + dev_ProjMatrix[proj_offset + 14];
 
 			_u /= w;
 			_v /= w;
@@ -238,7 +257,7 @@ void CUDA::make_PC(
 	uchar* hst_r)
 {
 	// TODO: develop to operate for mode 0~3.
-	// For now, it can be operated correctly ONLY for mode 4~13.
+	// For now, it can be operated correctly ONLY for mode 4 ~ 13.
 	GpuMat color_img_gpu, depth_img_gpu;
 	color_img_gpu.upload(color_img);
 	depth_img_gpu.upload(depth_img);
@@ -251,6 +270,7 @@ void CUDA::make_PC(
 	uchar* dev_b, * dev_g, * dev_r;
 	double* dev_K, * dev_R_wc_inv, * dev_t_wc;
 
+	memoryPrint(__LINE__);
 	GpuErrorCheck(cudaMalloc(&dev_x, sizeof(double) * numpix));
 	GpuErrorCheck(cudaMalloc(&dev_y, sizeof(double) * numpix));
 	GpuErrorCheck(cudaMalloc(&dev_z, sizeof(double) * numpix));
@@ -264,7 +284,6 @@ void CUDA::make_PC(
 	GpuErrorCheck(cudaMemcpy(dev_K, hst_K, sizeof(double) * 9, cudaMemcpyHostToDevice));
 	GpuErrorCheck(cudaMemcpy(dev_R_wc_inv, hst_R_wc_inv, sizeof(double) * 9, cudaMemcpyHostToDevice));
 	GpuErrorCheck(cudaMemcpy(dev_t_wc, hst_t_wc, sizeof(double) * 3, cudaMemcpyHostToDevice));
-
 	make_PC_GPU << < grid, block >> > (color_img_gpu, depth_img_gpu, scaleZ, dev_K, dev_R_wc_inv, dev_t_wc, dev_x, dev_y, dev_z, dev_b, dev_g, dev_r);
 
 	GpuErrorCheck(cudaMemcpy(hst_x, dev_x, sizeof(double) * numpix, cudaMemcpyDeviceToHost));
@@ -283,12 +302,15 @@ void CUDA::make_PC(
 	GpuErrorCheck(cudaFree(dev_K));
 	GpuErrorCheck(cudaFree(dev_R_wc_inv));
 	GpuErrorCheck(cudaFree(dev_t_wc));
+	memoryPrint(__LINE__);
 }
 
 void CUDA::perform_projection(
-	Mat& proj_img,
-	Mat& is_hole_proj_img,
-	Mat& depth_value_img,
+	Mat sample_mat,
+	uchar** proj_data,
+	uchar** is_hole_proj_data,
+	double** depth_value_data,
+	int total_num_cameras,
 	double* hst_ProjMatrix,
 	int ppc_size,
 	float* hst_x,
@@ -299,10 +321,8 @@ void CUDA::perform_projection(
 	uchar* hst_v,
 	bool* hst_occlusion)
 {
-	GpuMat proj_img_gpu, hole_img_gpu, depth_img_gpu;
-	proj_img_gpu.upload(proj_img);
-	hole_img_gpu.upload(is_hole_proj_img);
-	depth_img_gpu.upload(depth_value_img);
+	int rows = sample_mat.rows;
+	int cols = sample_mat.cols;
 
 	int threadsPerBlock = 256;
 	int blocksPerGrid =	(ppc_size + threadsPerBlock - 1) / threadsPerBlock;
@@ -310,29 +330,61 @@ void CUDA::perform_projection(
 	uchar* dev_color_y, * dev_u, * dev_v;
 	bool* dev_occlusion;
 	double* dev_ProjMatrix;
-	GpuErrorCheck(cudaMalloc(&dev_x, sizeof(float) * ppc_size));
-	GpuErrorCheck(cudaMalloc(&dev_geo_y, sizeof(float) * ppc_size));
-	GpuErrorCheck(cudaMalloc(&dev_z, sizeof(float) * ppc_size));
-	GpuErrorCheck(cudaMalloc(&dev_color_y, sizeof(uchar) * ppc_size));
-	GpuErrorCheck(cudaMalloc(&dev_u, sizeof(uchar) * ppc_size));
-	GpuErrorCheck(cudaMalloc(&dev_v, sizeof(uchar) * ppc_size));
-	GpuErrorCheck(cudaMalloc(&dev_occlusion, sizeof(bool) * ppc_size));
-	GpuErrorCheck(cudaMalloc(&dev_ProjMatrix, sizeof(double) * 16));
+	size_t total_size = ppc_size * total_num_cameras;
+	
+	clock_t start = clock();
+	GpuErrorCheck(cudaMalloc(&dev_x, sizeof(float) * total_size));
+	GpuErrorCheck(cudaMalloc(&dev_geo_y, sizeof(float) * total_size));
+	GpuErrorCheck(cudaMalloc(&dev_z, sizeof(float) * total_size));
+	GpuErrorCheck(cudaMalloc(&dev_color_y, sizeof(uchar) * total_size));
+	GpuErrorCheck(cudaMalloc(&dev_u, sizeof(uchar) * total_size));
+	GpuErrorCheck(cudaMalloc(&dev_v, sizeof(uchar) * total_size));
+	GpuErrorCheck(cudaMalloc(&dev_occlusion, sizeof(bool) * total_size));
+	GpuErrorCheck(cudaMalloc(&dev_ProjMatrix, sizeof(double) * 16 * total_num_cameras));
 
-	GpuErrorCheck(cudaMemcpy(dev_x, hst_x, sizeof(float) * ppc_size, cudaMemcpyHostToDevice));
-	GpuErrorCheck(cudaMemcpy(dev_geo_y, hst_geo_y, sizeof(float) * ppc_size, cudaMemcpyHostToDevice));
-	GpuErrorCheck(cudaMemcpy(dev_z, hst_z, sizeof(float) * ppc_size, cudaMemcpyHostToDevice));
-	GpuErrorCheck(cudaMemcpy(dev_color_y, hst_color_y, sizeof(uchar) * ppc_size, cudaMemcpyHostToDevice));
-	GpuErrorCheck(cudaMemcpy(dev_u, hst_u, sizeof(uchar) * ppc_size, cudaMemcpyHostToDevice));
-	GpuErrorCheck(cudaMemcpy(dev_v, hst_v, sizeof(uchar) * ppc_size, cudaMemcpyHostToDevice));
-	GpuErrorCheck(cudaMemcpy(dev_occlusion, hst_occlusion, sizeof(bool) * ppc_size, cudaMemcpyHostToDevice));
-	GpuErrorCheck(cudaMemcpy(dev_ProjMatrix, hst_ProjMatrix, sizeof(double) * 16, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_x, hst_x, sizeof(float) * total_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_geo_y, hst_geo_y, sizeof(float) * total_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_z, hst_z, sizeof(float) * total_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_color_y, hst_color_y, sizeof(uchar) * total_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_u, hst_u, sizeof(uchar) * total_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_v, hst_v, sizeof(uchar) * total_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_occlusion, hst_occlusion, sizeof(bool) * total_size, cudaMemcpyHostToDevice));
+	GpuErrorCheck(cudaMemcpy(dev_ProjMatrix, hst_ProjMatrix, sizeof(double) * 16 * total_num_cameras, cudaMemcpyHostToDevice));
+	clock_t end = clock();
+	printf("CPU to GPU memcpy: %lf\n", (double)(end - start) / CLOCKS_PER_SEC);
 
-	perform_projection_GPU << <blocksPerGrid, threadsPerBlock >> > (proj_img_gpu, hole_img_gpu, depth_img_gpu, ppc_size, dev_ProjMatrix, dev_x, dev_geo_y, dev_z, dev_color_y, dev_u, dev_v, dev_occlusion);
+	start = clock();
+	for (int cam_num = 0; cam_num < total_num_cameras; ++cam_num) {
+		Mat proj_img(rows, cols, CV_8UC3, proj_data[cam_num]);
+		Mat hole_img(rows, cols, CV_8UC1, is_hole_proj_data[cam_num]);
+		Mat depth_img(rows, cols, CV_64FC1, depth_value_data[cam_num]);
+		GpuMat proj_img_gpu, hole_img_gpu, depth_img_gpu;
+				
+		proj_img_gpu.upload(proj_img);
+		hole_img_gpu.upload(hole_img);
+		depth_img_gpu.upload(depth_img);
+		
+		perform_projection_GPU <<< blocksPerGrid, threadsPerBlock >>> (ppc_size, cam_num, proj_img_gpu, hole_img_gpu, depth_img_gpu, dev_ProjMatrix, dev_x, dev_geo_y, dev_z, dev_color_y, dev_u, dev_v, dev_occlusion);
+		
+		proj_img_gpu.download(proj_img);
+		hole_img_gpu.download(hole_img);
+		depth_img_gpu.download(depth_img);
 
-	proj_img_gpu.download(proj_img);
-	hole_img_gpu.download(is_hole_proj_img);
-	depth_img_gpu.download(depth_value_img);
+		for (int y = 0; y < rows; ++y) {
+			for (int x = 0; x < cols; ++x) {
+				size_t offset = y * rows + x;
+				proj_data[cam_num][offset + 0] = proj_img.at<Vec3b>(y, x)[0];
+				proj_data[cam_num][offset + 1] = proj_img.at<Vec3b>(y, x)[1];
+				proj_data[cam_num][offset + 2] = proj_img.at<Vec3b>(y, x)[2];
+				is_hole_proj_data[cam_num][offset] = hole_img.at<uchar>(y, x);
+				depth_value_data[cam_num][offset] = depth_img.at<double>(y, x);
+			}
+		}
+	}
+		
+	end = clock();
+	printf("GPU computation time: %lf\n", (double)(end - start) / CLOCKS_PER_SEC);
+
 
 	GpuErrorCheck(cudaFree(dev_x));
 	GpuErrorCheck(cudaFree(dev_geo_y));
