@@ -51,7 +51,7 @@
 #include <psapi.h>
 #include <conio.h>
 
-#ifdef ON_GPU
+#if defined(ON_GPU) || defined(CUDA_TEST)
 #include "CUDA.cuh"
 #endif
 
@@ -76,7 +76,7 @@ extern string path;
 extern vector<CalibStruct> m_CalibParams;
 extern int proj_mode;
 
-#ifdef ON_GPU
+#if defined(ON_GPU) || defined(CUDA_TEST)
 extern CUDA CudaGpu;
 #endif
 

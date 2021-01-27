@@ -2357,7 +2357,6 @@ double find_point_dist(
 
 	numerator = det(M);
 
-
 	// sign
 	if (numerator < 0) numerator = -1;
 

@@ -133,9 +133,9 @@ void projection_PPC_with_hole_filling_per_viewpoint(
 
 void perform_projection(
 	int cur_ppc_size,
-	vector<Mat> proj_imgs,
-	vector<Mat> is_hole_proj_imgs,
-	vector<Mat> depth_value_imgs);
+	vector<Mat>& proj_imgs,
+	vector<Mat>& is_hole_proj_imgs,
+	vector<Mat>& depth_value_imgs);
 
 void perform_projection(
 	int cam_num,

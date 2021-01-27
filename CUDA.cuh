@@ -19,8 +19,8 @@ extern "C"
 	/////////////////////////////////////////////////////////
 	/////////////////////////////////////////////////////////
 	__global__ void makc_PC_GPU(
-		cuda::PtrStepSz<uchar3> color_src,
-		cuda::PtrStepSz<ushort> depth_src,
+		const cuda::PtrStepSz<uchar3> color_src,
+		const cuda::PtrStepSz<ushort> depth_src,
 		double scaleZ,
 		double* K,
 		double* R_wc_inv,
@@ -34,6 +34,7 @@ extern "C"
 
 	__global__ void perform_projection_GPU(
 		int ppc_size,
+		int total_num_cameras,
 		int cam_num,
 		cuda::PtrStepSz<uchar3> proj_img,
 		cuda::PtrStepSz<uchar> is_hole_proj_img,
@@ -58,7 +59,7 @@ extern "C"
 		int y,
 		double Z);
 
-	__device__ double find_point_dist(double w, double* projMatrix);
+	__device__ double find_point_dist(double w, int proj_offset, double* projMatrix);
 
 	__device__ double determinant(double mat[3][3]);
 	///////////////////////////////////////////////////////
@@ -102,5 +103,7 @@ extern "C"
 			uchar* hst_u,
 			uchar* hst_v,
 			bool* hst_occlusion);
+
+		void test();
 	};
 }

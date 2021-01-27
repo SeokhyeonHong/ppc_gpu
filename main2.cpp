@@ -13,7 +13,7 @@ vector<int> camera_order;
 int proj_mode = 0; //0-projection , 1-backprojection
 vector<PPC_v1> ppc_vec;
 
-#ifdef ON_GPU
+#if defined(ON_GPU) || defined(CUDA_TEST)
 CUDA CudaGpu;
 #endif
 
@@ -45,7 +45,7 @@ int main()
 	//fixed variable
 	const int referenceView = 220;
 	version = 1.0;
-	ppc_mode = 3;
+	ppc_mode = 1;
 	colorspace = 0;
 
 	//unfixed variable
@@ -56,7 +56,7 @@ int main()
 	ppc_vec.resize(max_ppc_size);
 	const int furthest_index = (view_num + 1) / 2 * 22;
 	
-	
+	CudaGpu.test();
 
 #ifndef TEST
 	data_mode = 5;
@@ -213,12 +213,20 @@ int main()
 				vector<Mat> is_hole_filled_imgs(total_num_cameras);
 				vector<Mat> depth_value_imgs(total_num_cameras);
 
+				vector<Mat> test_projection(total_num_cameras);
+				vector<Mat> test_hole(total_num_cameras);
+				vector<Mat> test_depth(total_num_cameras);
+
 				for (int cam = 0; cam < total_num_cameras; cam++) {
 					projection_imgs[cam] = temp_8.clone();
 					filled_imgs[cam] = temp_8.clone();
 					is_hole_proj_imgs[cam] = is_hole_temp.clone();
 					is_hole_filled_imgs[cam] = is_hole_temp.clone();
 					depth_value_imgs[cam] = depth_value_img.clone();
+
+					test_projection[cam] = temp_8.clone();
+					test_hole[cam] = is_hole_temp.clone();
+					test_depth[cam] = depth_value_img.clone();
 				}
 
 				vector<float> psnrs_p, psnrs_h;
@@ -274,13 +282,14 @@ int main()
 
 					//perform_projection
 					clock_t t7, t8;
-#ifdef CUDA_TEST
 					t7 = clock();
-					perform_projection(cur_ppc_size, projection_imgs, is_hole_proj_imgs, depth_value_imgs);
+#ifdef CUDA_TEST
+					// perform_projection(cur_ppc_size, projection_imgs, is_hole_proj_imgs, depth_value_imgs);
+					perform_projection(cur_ppc_size, test_projection, test_hole, test_depth);
 					t8 = clock();
 					cout << "projection whole views time : " << (double)(t8 - t7) / CLOCKS_PER_SEC << endl;
 					cout << "---------------------------------" << endl;
-#else
+// #else
 					for (int cam = 0; cam < total_num_cameras; cam++) {
 						cout << cam << "th pointcloud is being projected ..." << endl;
 						int nNeighbor = 4;
@@ -291,6 +300,31 @@ int main()
 						perform_projection(cam, cur_ppc_size, projection_imgs[cam], is_hole_proj_imgs[cam], depth_value_imgs[cam]);
 						is_hole_filled_imgs[cam] = is_hole_proj_imgs[cam].clone();
 						// holefilling_per_viewpoint(projection_imgs[cam], filled_imgs[cam], is_hole_filled_imgs[cam], window_size);
+
+						/*
+						for (int y = 0; y < projection_imgs[cam].rows; ++y) {
+							for (int x = 0; x < projection_imgs[cam].cols; ++x) {
+								if (projection_imgs[cam].at<Vec3b>(y, x) != test_projection[cam].at<Vec3b>(y, x)) {
+									printf("Error in %dth cam (y: %d, x: %d) projection\n", cam, y, x);
+									printf("CPU: %u %u %u\tGPU: %u %u %u\n\n", projection_imgs[cam].at<Vec3b>(y, x)[0], projection_imgs[cam].at<Vec3b>(y, x)[1], projection_imgs[cam].at<Vec3b>(y, x)[2], test_projection[cam].at<Vec3b>(y, x)[0], test_projection[cam].at<Vec3b>(y, x)[1], test_projection[cam].at<Vec3b>(y, x)[2]);
+								}
+							}
+						}
+						for (int y = 0; y < is_hole_proj_imgs[cam].rows; ++y) {
+							for (int x = 0; x < is_hole_proj_imgs[cam].cols; ++x) {
+								if (is_hole_proj_imgs[cam].at<uchar>(y, x) != test_hole[cam].at<uchar>(y, x))
+									printf("Error in (y: %d, x: %d) hole       %u %u\n", y, x, is_hole_proj_imgs[cam].at<uchar>(y, x), test_hole[cam].at<uchar>(y, x));
+							}
+						}
+
+						for (int y = 0; y < depth_value_imgs[cam].rows; ++y) {
+							for (int x = 0; x < depth_value_imgs[cam].cols; ++x) {
+								if (depth_value_imgs[cam].at<double>(y, x) != test_depth[cam].at<double>(y, x))
+									printf("Error in (y: %d, x: %d) depth     CPU: %lf   GPU: %lf\n", y, x, depth_value_imgs[cam].at<double>(y, x), test_depth[cam].at<double>(y, x));
+							}
+						}
+						*/
+						printf("cam: %d\tCPU: %lf\tGPU: %lf\n", cam, depth_value_imgs[cam].at<double>(0, 3680), test_depth[cam].at<double>(0, 3680));
 						t8 = clock();
 
 						cout << "projection and hole filling one view time : " << (double)(t8 - t7) / CLOCKS_PER_SEC << endl;
@@ -313,7 +347,7 @@ int main()
 				cout << "make ppc and projection final time : " << (t6 - t1) / CLOCKS_PER_SEC << endl << endl;
 
 				printPSNRWithoutBlackPixel_RGB(color_imgs, projection_imgs, is_hole_proj_imgs, psnrs_p_1, psnrs_p_2, psnrs_p_3, num_holes_p);
-				printPSNRWithBlackPixel_RGB(color_imgs, filled_imgs, is_hole_filled_imgs, psnrs_h_1, psnrs_h_2, psnrs_h_3, num_holes_h);
+				// printPSNRWithBlackPixel_RGB(color_imgs, filled_imgs, is_hole_filled_imgs, psnrs_h_1, psnrs_h_2, psnrs_h_3, num_holes_h);
 
 #ifdef TEST			
 				//save images
@@ -329,8 +363,8 @@ int main()
 					cvtColor(projection_imgs[cam], proj_viewImg, CV_YUV2BGR);
 					imwrite("output\\image\\" + name_mode + "\\" + version_ + "_" + name_mode + "_" + name_ppc + "_" + to_string(voxel_div_num) + "_projmode" + to_string(proj_mode) + "_view" + to_string(camera_order_LookUpTable.find(camera_order[cam])->second) + "_proj.png", proj_viewImg);
 
-					cvtColor(filled_imgs[cam], filled_viewImg, CV_YUV2BGR);
-					imwrite("output\\image\\" + name_mode + "\\" + version_ + "_" + name_mode + "_" + name_ppc + "_" + to_string(voxel_div_num) + "_projmode" + to_string(proj_mode) + "_view" + to_string(camera_order_LookUpTable.find(camera_order[cam])->second) + "_filled.png", filled_viewImg);
+					// cvtColor(filled_imgs[cam], filled_viewImg, CV_YUV2BGR);
+					// imwrite("output\\image\\" + name_mode + "\\" + version_ + "_" + name_mode + "_" + name_ppc + "_" + to_string(voxel_div_num) + "_projmode" + to_string(proj_mode) + "_view" + to_string(camera_order_LookUpTable.find(camera_order[cam])->second) + "_filled.png", filled_viewImg);
 
 					proj_viewImg.release();
 					filled_viewImg.release();

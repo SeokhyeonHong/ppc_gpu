@@ -1463,9 +1463,9 @@ void projection_PPC_with_hole_filling_per_viewpoint(
 #ifdef CUDA_TEST
 void perform_projection(
 	int cur_ppc_size,
-	vector<Mat> proj_imgs,
-	vector<Mat> is_hole_proj_imgs,
-	vector<Mat> depth_value_imgs)
+	vector<Mat>& proj_imgs,
+	vector<Mat>& is_hole_proj_imgs,
+	vector<Mat>& depth_value_imgs)
 {
 	// total_num_cameras * cur_ppc_size
 	printf("perform_projection with CUDA_TEST\n");
@@ -1492,7 +1492,7 @@ void perform_projection(
 			hst_u.push_back(color[1]);
 			hst_v.push_back(color[0]);
 
-			hst_occlusion[i] = ppc_vec[i].CheckOcclusion(cam_num);
+			hst_occlusion[total_num_cameras * i + cam_num] = ppc_vec[i].CheckOcclusion(cam_num);
 		}
 	}
 
@@ -1503,24 +1503,23 @@ void perform_projection(
 			hst_ProjMatrix.push_back(data[i]);
 	}
 
-	size_t num_imgs = proj_imgs.size();
 	size_t rows = proj_imgs[0].rows, cols = proj_imgs[0].cols;
 	size_t num_pixels = rows * cols;
-	size_t total_num = num_imgs * num_pixels;
+	size_t total_num = total_num_cameras * num_pixels;
 
-	uchar** proj_data = (uchar**)malloc(sizeof(uchar*) * num_imgs);
-	uchar** is_hole_proj_data = (uchar**)malloc(sizeof(uchar*) * num_imgs);
-	double** depth_value_data = (double**)malloc(sizeof(double*) * num_imgs);
-	for (int i = 0; i < num_imgs; ++i) {
+	uchar** proj_data = (uchar**)malloc(sizeof(uchar*) * total_num_cameras);
+	uchar** is_hole_proj_data = (uchar**)malloc(sizeof(uchar*) * total_num_cameras);
+	double** depth_value_data = (double**)malloc(sizeof(double*) * total_num_cameras);
+	for (int i = 0; i < total_num_cameras; ++i) {
 		proj_data[i] = (uchar*)malloc(sizeof(uchar) * 3 * num_pixels);
 		is_hole_proj_data[i] = (uchar*)malloc(sizeof(uchar) * num_pixels);
 		depth_value_data[i] = (double*)malloc(sizeof(double) * num_pixels);
 		for (int y = 0; y < rows; ++y) {
 			for (int x = 0; x < cols; ++x) {
 				size_t offset = y * rows + x;
-				proj_data[i][offset + 0] = proj_imgs[i].at<Vec3b>(y, x)[0];
-				proj_data[i][offset + 1] = proj_imgs[i].at<Vec3b>(y, x)[1];
-				proj_data[i][offset + 2] = proj_imgs[i].at<Vec3b>(y, x)[2];
+				proj_data[i][offset * 3 + 0] = proj_imgs[i].at<Vec3b>(y, x)[0];
+				proj_data[i][offset * 3 + 1] = proj_imgs[i].at<Vec3b>(y, x)[1];
+				proj_data[i][offset * 3 + 2] = proj_imgs[i].at<Vec3b>(y, x)[2];
 				is_hole_proj_data[i][offset] = is_hole_proj_imgs[i].at<uchar>(y, x);
 				depth_value_data[i][offset] = depth_value_imgs[i].at<double>(y, x);
 			}
@@ -1530,22 +1529,22 @@ void perform_projection(
 	clock_t end = clock();
 	printf("conversion time: %lf sec\n", (double)(end - start) / CLOCKS_PER_SEC);
 
-	CudaGpu.perform_projection(proj_imgs[0], proj_data, is_hole_proj_data, depth_value_data, total_num_cameras, hst_ProjMatrix.data(), cur_ppc_size, hst_x.data(), hst_geo_y.data(), hst_z.data(), hst_color_y.data(), hst_u.data(), hst_v.data(), hst_occlusion);
+	CudaGpu.perform_projection(proj_imgs[0], proj_data, is_hole_proj_data, depth_value_data, total_num_cameras, hst_ProjMatrix.data(), cur_ppc_size, (float*)hst_x.data(), (float*)hst_geo_y.data(), (float*)hst_z.data(), hst_color_y.data(), hst_u.data(), hst_v.data(), hst_occlusion);
 
-	for (int i = 0; i < num_imgs; ++i) {
+	for (int i = 0; i < total_num_cameras; ++i) {
 		for (int y = 0; y < rows; ++y) {
 			for (int x = 0; x < cols; ++x) {
 				size_t offset = y * rows + x;
-				proj_imgs[i].at<Vec3b>(y, x)[0] = proj_data[i][offset + 0];
-				proj_imgs[i].at<Vec3b>(y, x)[1] = proj_data[i][offset + 1];
-				proj_imgs[i].at<Vec3b>(y, x)[2] = proj_data[i][offset + 2];
+				proj_imgs[i].at<Vec3b>(y, x)[0] = proj_data[i][offset * 3 + 0];
+				proj_imgs[i].at<Vec3b>(y, x)[1] = proj_data[i][offset * 3 + 1];
+				proj_imgs[i].at<Vec3b>(y, x)[2] = proj_data[i][offset * 3 + 2];
 				is_hole_proj_imgs[i].at<uchar>(y, x) = is_hole_proj_data[i][offset];
 				depth_value_imgs[i].at<double>(y, x) = depth_value_data[i][offset];
 			}
 		}
 	}
 
-	for (int i = 0; i < num_imgs; ++i) {
+	for (int i = 0; i < total_num_cameras; ++i) {
 		free(proj_data[i]);
 		free(is_hole_proj_data[i]);
 		free(depth_value_data[i]);
@@ -1555,7 +1554,7 @@ void perform_projection(
 	free(depth_value_data);
 	free(hst_occlusion);
 }
-#else
+// #else
 void perform_projection(
 	int cam_num,
 	int cur_ppc_size,
@@ -1581,10 +1580,8 @@ void perform_projection(
 
 	uchar* proj_img_data = proj_img.data;
 	uchar* is_hole_img_data = is_hole_proj_img.data;
-	int cnt1 = 0, cnt2 = 0, cnt3 = 0;
 
 	int wvu;
-
 	for (int i = 0; i < cur_ppc_size; i++) {
 		if (!ppc_vec[i].CheckOcclusion(cam_num)) {
 			geo = ppc_vec[i].GetGeometry();
@@ -1604,10 +1601,13 @@ void perform_projection(
 
 			dist = find_point_dist(w, cam_num);
 
+			if (u == 3680 && v == 0)
+				printf("CPU\tcam: %d\tpoint: %d\tdist: %lf\n", cam_num, i, dist);
+
 			if ((u < 0) || (v < 0) || (u > _width - 1) || (v > _height - 1)) continue;
 
 			wvu = _width * v + u;
-
+			
 			if (*depth_value_img.ptr<double>(v, u) == -1) {
 				*depth_value_img.ptr<double>(v, u) = dist;
 				is_hole_img_data[wvu] = 0;

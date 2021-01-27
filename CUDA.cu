@@ -54,8 +54,8 @@ CUDA::~CUDA(void)
 /////////////////////////////////////////////////////////
 
 __global__ void make_PC_GPU(
-	cuda::PtrStepSz<uchar3> color_src,
-	cuda::PtrStepSz<ushort> depth_src,
+	const cuda::PtrStepSz<uchar3> color_src,
+	const cuda::PtrStepSz<ushort> depth_src,
 	double scaleZ,
 	double* K,
 	double* R_wc_inv,
@@ -72,13 +72,13 @@ __global__ void make_PC_GPU(
 
 	int cols = color_src.cols;
 
-	if (0 <= x && x < color_src.cols && 0 <= y && y < color_src.rows)
-	{
-		dev_b[y * cols + x] = color_src.ptr(y)[x].x;
-		dev_g[y * cols + x] = color_src.ptr(y)[x].y;
-		dev_r[y * cols + x] = color_src.ptr(y)[x].z;
+	if (0 <= x && x < color_src.cols && 0 <= y && y < color_src.rows) {
+		uchar3 color = color_src(y, x);
+		dev_b[y * cols + x] = color.x;
+		dev_g[y * cols + x] = color.y;
+		dev_r[y * cols + x] = color.z;
 
-		ushort depth_level = depth_src.ptr(y)[x];
+		ushort depth_level = depth_src(y, x);
 
 		double Z = depth_level_2_Z_s_direct(depth_level, scaleZ);
 
@@ -91,6 +91,7 @@ __global__ void make_PC_GPU(
 
 __global__ void perform_projection_GPU(
 	int ppc_size,
+	int total_num_cameras,
 	int cam_num,
 	cuda::PtrStepSz<uchar3> proj_img,
 	cuda::PtrStepSz<uchar> is_hole_proj_img,
@@ -112,49 +113,44 @@ __global__ void perform_projection_GPU(
 	//////////////////////////////////
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	int _width = depth_value_img.cols, _height = depth_value_img.rows;
-	int offset = ppc_size * cam_num;
-	int proj_offset = 16 * cam_num;
 	if (0 <= i && i < ppc_size) {
-		if (!dev_occlusion[offset + i]) {
+		int offset = i * total_num_cameras;
+		int proj_offset = 16 * cam_num;
+		if (!dev_occlusion[offset + cam_num]) {
 			// projetion_XYZ_2_UV
 			double _u, _v, w;
-			_u = dev_ProjMatrix[proj_offset + 0] * dev_x[i] + dev_ProjMatrix[proj_offset + 4] * dev_geo_y[i] + dev_ProjMatrix[proj_offset + 8] * dev_z[i] + dev_ProjMatrix[proj_offset + 12];
-			_v = dev_ProjMatrix[proj_offset + 1] * dev_x[i] + dev_ProjMatrix[proj_offset + 5] * dev_geo_y[i] + dev_ProjMatrix[proj_offset + 9] * dev_z[i] + dev_ProjMatrix[proj_offset + 13];
-			w = dev_ProjMatrix[proj_offset + 2] * dev_x[i] + dev_ProjMatrix[proj_offset + 6] * dev_geo_y[i] + dev_ProjMatrix[proj_offset + 10] * dev_z[i] + dev_ProjMatrix[proj_offset + 14];
+			_u = dev_ProjMatrix[proj_offset + 0] * (double)dev_x[i] + dev_ProjMatrix[proj_offset + 4] * (double)dev_geo_y[i] + dev_ProjMatrix[proj_offset + 8] * (double)dev_z[i] + dev_ProjMatrix[proj_offset + 12];
+			_v = dev_ProjMatrix[proj_offset + 1] * (double)dev_x[i] + dev_ProjMatrix[proj_offset + 5] * (double)dev_geo_y[i] + dev_ProjMatrix[proj_offset + 9] * (double)dev_z[i] + dev_ProjMatrix[proj_offset + 13];
+			w = dev_ProjMatrix[proj_offset + 2] * (double)dev_x[i] + dev_ProjMatrix[proj_offset + 6] * (double)dev_geo_y[i] + dev_ProjMatrix[proj_offset + 10] * (double)dev_z[i] + dev_ProjMatrix[proj_offset + 14];
 
 			_u /= w;
 			_v /= w;
 
-			int u = (int)lround(_u);
-			int v = (int)lround(_v);
+			int u = __double2int_rn(_u);
+			int v = __double2int_rn(_v);
 
-			double dist = find_point_dist(w, dev_ProjMatrix);
+			double dist = find_point_dist(w, proj_offset, dev_ProjMatrix);
 
-			bool possible = true;
-			if ((u < 0) || (v < 0) || (u > _width - 1) || (v > _height - 1)) {
-				possible = false;
+			if (u == 3680 && v == 0)
+				printf("GPU\tcam: %d\tpoint: %d\tdist: %lf\n", cam_num, i, dist);
+
+			if ((u < 0) || (v < 0) || (u > _width - 1) || (v > _height - 1)) return;
+
+			if (depth_value_img(v, u) == -1) {
+				depth_value_img(v, u) = dist;
+				is_hole_proj_img(v, u) = 0;
 			}
 			else {
-				if (depth_value_img.ptr(v)[u] == -1) {
-					depth_value_img.ptr(v)[u] = dist;
-					is_hole_proj_img.ptr(v)[u] = 0;
-				}
-				else {
-					if (dist < depth_value_img.ptr(v)[u])
-						depth_value_img.ptr(v)[u] = dist;
-					else
-						possible = false;
-				}
+				if (dist < depth_value_img(v, u))
+					depth_value_img(v, u) = dist;
+				else
+					return;
 			}
 
-			if (possible) {
-				proj_img.ptr(v)[u].x = dev_color_y[offset + i];
-				proj_img.ptr(v)[u].y = dev_u[offset + i];
-				proj_img.ptr(v)[u].z = dev_v[offset + i];
-			}
+			int location = offset + cam_num;
+			proj_img(v, u) = make_uchar3(dev_color_y[location], dev_u[location], dev_v[location]);
 		}
 	}
-
 }
 
 __device__ double depth_level_2_Z_s_direct(ushort d, double scaleZ)
@@ -194,16 +190,16 @@ __device__ double3 MVG(
 	return C_world;
 }
 
-__device__ double find_point_dist(double w, double* projMatrix)
+__device__ double find_point_dist(double w, int proj_offset, double* projMatrix)
 {
 	double numerator = 0., denominator = 0., dist = 0.;
 	double M[3][3];
 	for (int i = 0; i < 3; i++)
 		for (int j = 0; j < 3; j++)
-			M[i][j] = projMatrix[4 * i + j];
+			M[i][j] = projMatrix[proj_offset + 4 * j + i];
 
 	for (int i = 0; i < 3; i++)
-		denominator += (M[2][i] * M[2][i]);
+		denominator = denominator + (M[2][i] * M[2][i]);
 
 	denominator = sqrt(denominator);
 	numerator = determinant(M);
@@ -281,7 +277,9 @@ void CUDA::make_PC(
 	GpuErrorCheck(cudaMemcpy(dev_K, hst_K, sizeof(double) * 9, cudaMemcpyHostToDevice));
 	GpuErrorCheck(cudaMemcpy(dev_R_wc_inv, hst_R_wc_inv, sizeof(double) * 9, cudaMemcpyHostToDevice));
 	GpuErrorCheck(cudaMemcpy(dev_t_wc, hst_t_wc, sizeof(double) * 3, cudaMemcpyHostToDevice));
+
 	make_PC_GPU << < grid, block >> > (color_img_gpu, depth_img_gpu, scaleZ, dev_K, dev_R_wc_inv, dev_t_wc, dev_x, dev_y, dev_z, dev_b, dev_g, dev_r);
+	cudaDeviceSynchronize();
 
 	GpuErrorCheck(cudaMemcpy(hst_x, dev_x, sizeof(double) * numpix, cudaMemcpyDeviceToHost));
 	GpuErrorCheck(cudaMemcpy(hst_y, dev_y, sizeof(double) * numpix, cudaMemcpyDeviceToHost));
@@ -299,6 +297,9 @@ void CUDA::make_PC(
 	GpuErrorCheck(cudaFree(dev_K));
 	GpuErrorCheck(cudaFree(dev_R_wc_inv));
 	GpuErrorCheck(cudaFree(dev_t_wc));
+
+	color_img_gpu.release();
+	depth_img_gpu.release();
 }
 
 void CUDA::perform_projection(
@@ -317,11 +318,8 @@ void CUDA::perform_projection(
 	uchar* hst_v,
 	bool* hst_occlusion)
 {
-	int rows = sample_mat.rows;
-	int cols = sample_mat.cols;
-
 	int threadsPerBlock = 256;
-	int blocksPerGrid =	(ppc_size + threadsPerBlock - 1) / threadsPerBlock;
+	int blocksPerGrid =	divUp(ppc_size + threadsPerBlock - 1, threadsPerBlock);
 	float* dev_x, * dev_geo_y, * dev_z;
 	uchar* dev_color_y, * dev_u, * dev_v;
 	bool* dev_occlusion;
@@ -348,31 +346,53 @@ void CUDA::perform_projection(
 	GpuErrorCheck(cudaMemcpy(dev_occlusion, hst_occlusion, sizeof(bool) * total_size, cudaMemcpyHostToDevice));
 	GpuErrorCheck(cudaMemcpy(dev_ProjMatrix, hst_ProjMatrix, sizeof(double) * 16 * total_num_cameras, cudaMemcpyHostToDevice));
 	clock_t end = clock();
-	printf("CPU to GPU memcpy: %lf\n", (double)(end - start) / CLOCKS_PER_SEC);
 
+	int rows = sample_mat.rows;
+	int cols = sample_mat.cols;
 	start = clock();
+	GpuMat proj_img_gpu, hole_img_gpu, depth_img_gpu;
+
 	for (int cam_num = 0; cam_num < total_num_cameras; ++cam_num) {
-		Mat proj_img(rows, cols, CV_8UC3, proj_data[cam_num]);
-		Mat hole_img(rows, cols, CV_8UC1, is_hole_proj_data[cam_num]);
-		Mat depth_img(rows, cols, CV_64FC1, depth_value_data[cam_num]);
-		GpuMat proj_img_gpu, hole_img_gpu, depth_img_gpu;
-				
-		proj_img_gpu.upload(proj_img);
-		hole_img_gpu.upload(hole_img);
-		depth_img_gpu.upload(depth_img);
-		
-		perform_projection_GPU <<< blocksPerGrid, threadsPerBlock >>> (ppc_size, cam_num, proj_img_gpu, hole_img_gpu, depth_img_gpu, dev_ProjMatrix, dev_x, dev_geo_y, dev_z, dev_color_y, dev_u, dev_v, dev_occlusion);
-		
-		proj_img_gpu.download(proj_img);
-		hole_img_gpu.download(hole_img);
-		depth_img_gpu.download(depth_img);
+		// Mat proj_img(rows, cols, CV_8UC3, proj_data[cam_num]);
+		// Mat hole_img(rows, cols, CV_8UC1, is_hole_proj_data[cam_num]);
+		// Mat depth_img(rows, cols, CV_64FC1, depth_value_data[cam_num]);
+		Mat proj_img(rows, cols, CV_8UC3);
+		Mat hole_img(rows, cols, CV_8UC1);
+		Mat depth_img(rows, cols, CV_64FC1);
 
 		for (int y = 0; y < rows; ++y) {
 			for (int x = 0; x < cols; ++x) {
 				size_t offset = y * rows + x;
-				proj_data[cam_num][offset + 0] = proj_img.at<Vec3b>(y, x)[0];
-				proj_data[cam_num][offset + 1] = proj_img.at<Vec3b>(y, x)[1];
-				proj_data[cam_num][offset + 2] = proj_img.at<Vec3b>(y, x)[2];
+				proj_img.at<Vec3b>(y, x)[0] = proj_data[cam_num][offset * 3 + 0];
+				proj_img.at<Vec3b>(y, x)[1] = proj_data[cam_num][offset * 3 + 1];
+				proj_img.at<Vec3b>(y, x)[2] = proj_data[cam_num][offset * 3 + 2];
+				hole_img.at<uchar>(y, x) = is_hole_proj_data[cam_num][offset];
+				depth_img.at<double>(y, x) = depth_value_data[cam_num][offset];
+			}
+		}
+
+		proj_img_gpu.upload(proj_img);
+		hole_img_gpu.upload(hole_img);
+		depth_img_gpu.upload(depth_img);
+
+		perform_projection_GPU <<< blocksPerGrid, threadsPerBlock >>> (ppc_size, total_num_cameras, cam_num, proj_img_gpu, hole_img_gpu, depth_img_gpu, dev_ProjMatrix, dev_x, dev_geo_y, dev_z, dev_color_y, dev_u, dev_v, dev_occlusion);
+		cudaDeviceSynchronize();
+
+		proj_img_gpu.download(proj_img);
+		hole_img_gpu.download(hole_img);
+		depth_img_gpu.download(depth_img);
+
+		Mat tmp;
+		String name = format("output\\%dth.jpg", cam_num);
+		cv::cvtColor(proj_img, tmp, CV_YUV2BGR);
+		imwrite(name, tmp);
+
+		for (int y = 0; y < rows; ++y) {
+			for (int x = 0; x < cols; ++x) {
+				size_t offset = y * rows + x;
+				proj_data[cam_num][offset * 3 + 0] = proj_img.at<Vec3b>(y, x)[0];
+				proj_data[cam_num][offset * 3 + 1] = proj_img.at<Vec3b>(y, x)[1];
+				proj_data[cam_num][offset * 3 + 2] = proj_img.at<Vec3b>(y, x)[2];
 				is_hole_proj_data[cam_num][offset] = hole_img.at<uchar>(y, x);
 				depth_value_data[cam_num][offset] = depth_img.at<double>(y, x);
 			}
@@ -381,8 +401,7 @@ void CUDA::perform_projection(
 		
 	end = clock();
 	printf("GPU computation time: %lf\n", (double)(end - start) / CLOCKS_PER_SEC);
-
-
+	
 	GpuErrorCheck(cudaFree(dev_x));
 	GpuErrorCheck(cudaFree(dev_geo_y));
 	GpuErrorCheck(cudaFree(dev_z));
@@ -391,4 +410,19 @@ void CUDA::perform_projection(
 	GpuErrorCheck(cudaFree(dev_v));
 	GpuErrorCheck(cudaFree(dev_occlusion));
 	GpuErrorCheck(cudaFree(dev_ProjMatrix));
+
+	proj_img_gpu.release();
+	hole_img_gpu.release();
+	depth_img_gpu.release();
+}
+
+void CUDA::test()
+{
+	Mat img = imread("logo.png");
+	GpuMat img_gpu;
+
+	img_gpu.upload(img);
+	img_gpu.download(img);
+
+	imwrite("save.png", img);
 }
