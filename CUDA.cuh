@@ -90,9 +90,9 @@ extern "C"
 
 		void perform_projection(
 			Mat sample_mat,
-			uchar** proj_data,
-			uchar** is_hole_proj_data,
-			double** depth_value_data,
+			uchar* proj_data,
+			uchar* is_hole_proj_data,
+			double* depth_value_data,
 			int total_num_cameras,
 			double* hst_ProjMatrix,
 			int valid_ppc_size,

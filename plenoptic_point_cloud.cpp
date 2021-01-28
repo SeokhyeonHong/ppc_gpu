@@ -1507,24 +1507,9 @@ void perform_projection(
 	size_t num_pixels = rows * cols;
 	size_t total_num = total_num_cameras * num_pixels;
 
-	uchar** proj_data = (uchar**)malloc(sizeof(uchar*) * total_num_cameras);
-	uchar** is_hole_proj_data = (uchar**)malloc(sizeof(uchar*) * total_num_cameras);
-	double** depth_value_data = (double**)malloc(sizeof(double*) * total_num_cameras);
-	for (int i = 0; i < total_num_cameras; ++i) {
-		proj_data[i] = (uchar*)malloc(sizeof(uchar) * 3 * num_pixels);
-		is_hole_proj_data[i] = (uchar*)malloc(sizeof(uchar) * num_pixels);
-		depth_value_data[i] = (double*)malloc(sizeof(double) * num_pixels);
-		for (int y = 0; y < rows; ++y) {
-			for (int x = 0; x < cols; ++x) {
-				size_t offset = y * rows + x;
-				proj_data[i][offset * 3 + 0] = proj_imgs[i].at<Vec3b>(y, x)[0];
-				proj_data[i][offset * 3 + 1] = proj_imgs[i].at<Vec3b>(y, x)[1];
-				proj_data[i][offset * 3 + 2] = proj_imgs[i].at<Vec3b>(y, x)[2];
-				is_hole_proj_data[i][offset] = is_hole_proj_imgs[i].at<uchar>(y, x);
-				depth_value_data[i][offset] = depth_value_imgs[i].at<double>(y, x);
-			}
-		}
-	}
+	uchar* proj_data = (uchar*)malloc(sizeof(uchar) * total_num_cameras * 3 * num_pixels);
+	uchar* is_hole_proj_data = (uchar*)malloc(sizeof(uchar) * total_num_cameras * num_pixels);
+	double* depth_value_data = (double*)malloc(sizeof(double) * total_num_cameras * num_pixels);
 
 	clock_t end = clock();
 	printf("conversion time: %lf sec\n", (double)(end - start) / CLOCKS_PER_SEC);
@@ -1532,23 +1517,23 @@ void perform_projection(
 	CudaGpu.perform_projection(proj_imgs[0], proj_data, is_hole_proj_data, depth_value_data, total_num_cameras, hst_ProjMatrix.data(), cur_ppc_size, (float*)hst_x.data(), (float*)hst_geo_y.data(), (float*)hst_z.data(), hst_color_y.data(), hst_u.data(), hst_v.data(), hst_occlusion);
 
 	for (int i = 0; i < total_num_cameras; ++i) {
+		size_t global_offset = i * rows * cols;
 		for (int y = 0; y < rows; ++y) {
 			for (int x = 0; x < cols; ++x) {
-				size_t offset = y * rows + x;
-				proj_imgs[i].at<Vec3b>(y, x)[0] = proj_data[i][offset * 3 + 0];
-				proj_imgs[i].at<Vec3b>(y, x)[1] = proj_data[i][offset * 3 + 1];
-				proj_imgs[i].at<Vec3b>(y, x)[2] = proj_data[i][offset * 3 + 2];
-				is_hole_proj_imgs[i].at<uchar>(y, x) = is_hole_proj_data[i][offset];
-				depth_value_imgs[i].at<double>(y, x) = depth_value_data[i][offset];
+				size_t offset = global_offset + (y * cols + x);
+				proj_imgs[i].at<Vec3b>(y, x)[0] = proj_data[offset * 3 + 0];
+				proj_imgs[i].at<Vec3b>(y, x)[1] = proj_data[offset * 3 + 1];
+				proj_imgs[i].at<Vec3b>(y, x)[2] = proj_data[offset * 3 + 2];
+				is_hole_proj_imgs[i].at<uchar>(y, x) = is_hole_proj_data[offset];
+				depth_value_imgs[i].at<double>(y, x) = depth_value_data[offset];
 			}
 		}
+		Mat tmp;
+		String name = format("output\\GCPU\\%dth.jpg", i);
+		cv::cvtColor(proj_imgs[i], tmp, CV_YUV2BGR);
+		imwrite(name, tmp);
 	}
 
-	for (int i = 0; i < total_num_cameras; ++i) {
-		free(proj_data[i]);
-		free(is_hole_proj_data[i]);
-		free(depth_value_data[i]);
-	}
 	free(proj_data);
 	free(is_hole_proj_data);
 	free(depth_value_data);

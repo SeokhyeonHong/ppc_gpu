@@ -284,12 +284,12 @@ int main()
 					clock_t t7, t8;
 					t7 = clock();
 #ifdef CUDA_TEST
-					// perform_projection(cur_ppc_size, projection_imgs, is_hole_proj_imgs, depth_value_imgs);
-					perform_projection(cur_ppc_size, test_projection, test_hole, test_depth);
+					// perform_projection(cur_ppc_size, test_projection, test_hole, test_depth);
+					perform_projection(cur_ppc_size, projection_imgs, is_hole_proj_imgs, depth_value_imgs);
 					t8 = clock();
 					cout << "projection whole views time : " << (double)(t8 - t7) / CLOCKS_PER_SEC << endl;
 					cout << "---------------------------------" << endl;
-// #else
+#else
 					for (int cam = 0; cam < total_num_cameras; cam++) {
 						cout << cam << "th pointcloud is being projected ..." << endl;
 						int nNeighbor = 4;
@@ -299,6 +299,11 @@ int main()
 						t7 = clock();
 						perform_projection(cam, cur_ppc_size, projection_imgs[cam], is_hole_proj_imgs[cam], depth_value_imgs[cam]);
 						is_hole_filled_imgs[cam] = is_hole_proj_imgs[cam].clone();
+
+						Mat tmp;
+						String name = format("output\\CPU\\%dth.jpg", cam);
+						cv::cvtColor(projection_imgs[cam], tmp, CV_YUV2BGR);
+						imwrite(name, tmp);
 						// holefilling_per_viewpoint(projection_imgs[cam], filled_imgs[cam], is_hole_filled_imgs[cam], window_size);
 
 						/*
@@ -316,6 +321,7 @@ int main()
 									printf("Error in (y: %d, x: %d) hole       %u %u\n", y, x, is_hole_proj_imgs[cam].at<uchar>(y, x), test_hole[cam].at<uchar>(y, x));
 							}
 						}
+						
 
 						for (int y = 0; y < depth_value_imgs[cam].rows; ++y) {
 							for (int x = 0; x < depth_value_imgs[cam].cols; ++x) {
@@ -324,7 +330,7 @@ int main()
 							}
 						}
 						*/
-						printf("cam: %d\tCPU: %lf\tGPU: %lf\n", cam, depth_value_imgs[cam].at<double>(0, 3680), test_depth[cam].at<double>(0, 3680));
+						// printf("cam: %d\tCPU: %lf\tGPU: %lf\n", cam, depth_value_imgs[cam].at<double>(0, 3680), test_depth[cam].at<double>(0, 3680));
 						t8 = clock();
 
 						cout << "projection and hole filling one view time : " << (double)(t8 - t7) / CLOCKS_PER_SEC << endl;

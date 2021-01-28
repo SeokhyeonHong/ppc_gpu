@@ -131,9 +131,6 @@ __global__ void perform_projection_GPU(
 
 			double dist = find_point_dist(w, proj_offset, dev_ProjMatrix);
 
-			if (u == 3680 && v == 0)
-				printf("GPU\tcam: %d\tpoint: %d\tdist: %lf\n", cam_num, i, dist);
-
 			if ((u < 0) || (v < 0) || (u > _width - 1) || (v > _height - 1)) return;
 
 			if (depth_value_img(v, u) == -1) {
@@ -149,6 +146,8 @@ __global__ void perform_projection_GPU(
 
 			int location = offset + cam_num;
 			proj_img(v, u) = make_uchar3(dev_color_y[location], dev_u[location], dev_v[location]);
+			// if (u > _height - 1)
+				// printf("cam: %d\tpoint: %d\tu: %d\tv: %d\n", cam_num, i, u, v);
 		}
 	}
 }
@@ -304,9 +303,9 @@ void CUDA::make_PC(
 
 void CUDA::perform_projection(
 	Mat sample_mat,
-	uchar** proj_data,
-	uchar** is_hole_proj_data,
-	double** depth_value_data,
+	uchar* proj_data,
+	uchar* is_hole_proj_data,
+	double* depth_value_data,
 	int total_num_cameras,
 	double* hst_ProjMatrix,
 	int ppc_size,
@@ -318,7 +317,7 @@ void CUDA::perform_projection(
 	uchar* hst_v,
 	bool* hst_occlusion)
 {
-	int threadsPerBlock = 256;
+	int threadsPerBlock = 1024;
 	int blocksPerGrid =	divUp(ppc_size + threadsPerBlock - 1, threadsPerBlock);
 	float* dev_x, * dev_geo_y, * dev_z;
 	uchar* dev_color_y, * dev_u, * dev_v;
@@ -353,23 +352,9 @@ void CUDA::perform_projection(
 	GpuMat proj_img_gpu, hole_img_gpu, depth_img_gpu;
 
 	for (int cam_num = 0; cam_num < total_num_cameras; ++cam_num) {
-		// Mat proj_img(rows, cols, CV_8UC3, proj_data[cam_num]);
-		// Mat hole_img(rows, cols, CV_8UC1, is_hole_proj_data[cam_num]);
-		// Mat depth_img(rows, cols, CV_64FC1, depth_value_data[cam_num]);
-		Mat proj_img(rows, cols, CV_8UC3);
-		Mat hole_img(rows, cols, CV_8UC1);
-		Mat depth_img(rows, cols, CV_64FC1);
-
-		for (int y = 0; y < rows; ++y) {
-			for (int x = 0; x < cols; ++x) {
-				size_t offset = y * rows + x;
-				proj_img.at<Vec3b>(y, x)[0] = proj_data[cam_num][offset * 3 + 0];
-				proj_img.at<Vec3b>(y, x)[1] = proj_data[cam_num][offset * 3 + 1];
-				proj_img.at<Vec3b>(y, x)[2] = proj_data[cam_num][offset * 3 + 2];
-				hole_img.at<uchar>(y, x) = is_hole_proj_data[cam_num][offset];
-				depth_img.at<double>(y, x) = depth_value_data[cam_num][offset];
-			}
-		}
+		Mat proj_img(rows, cols, CV_8UC3, Scalar(0, 0, 0));
+		Mat hole_img(rows, cols, CV_8UC1, Scalar(1));
+		Mat depth_img(rows, cols, CV_64FC1, Scalar(-1.0));
 
 		proj_img_gpu.upload(proj_img);
 		hole_img_gpu.upload(hole_img);
@@ -382,19 +367,18 @@ void CUDA::perform_projection(
 		hole_img_gpu.download(hole_img);
 		depth_img_gpu.download(depth_img);
 
-		Mat tmp;
-		String name = format("output\\%dth.jpg", cam_num);
-		cv::cvtColor(proj_img, tmp, CV_YUV2BGR);
-		imwrite(name, tmp);
-
+		size_t global_offset = cam_num * rows * cols;
 		for (int y = 0; y < rows; ++y) {
+			uchar* proj_ptr = proj_img.ptr<uchar>(y);
+			uchar* hole_ptr = hole_img.ptr<uchar>(y);
+			double* depth_ptr = depth_img.ptr<double>(y);
 			for (int x = 0; x < cols; ++x) {
-				size_t offset = y * rows + x;
-				proj_data[cam_num][offset * 3 + 0] = proj_img.at<Vec3b>(y, x)[0];
-				proj_data[cam_num][offset * 3 + 1] = proj_img.at<Vec3b>(y, x)[1];
-				proj_data[cam_num][offset * 3 + 2] = proj_img.at<Vec3b>(y, x)[2];
-				is_hole_proj_data[cam_num][offset] = hole_img.at<uchar>(y, x);
-				depth_value_data[cam_num][offset] = depth_img.at<double>(y, x);
+				size_t offset = global_offset + (y * cols + x);
+				proj_data[offset * 3 + 0] = proj_ptr[x * 3 + 0];
+				proj_data[offset * 3 + 1] = proj_ptr[x * 3 + 1];
+				proj_data[offset * 3 + 2] = proj_ptr[x * 3 + 2];
+				is_hole_proj_data[offset] = hole_ptr[x];
+				depth_value_data[offset] = depth_ptr[x];
 			}
 		}
 	}
